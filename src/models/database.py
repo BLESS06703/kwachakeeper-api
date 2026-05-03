@@ -12,7 +12,7 @@ from .transaction import Transaction, TransactionType, Category
 
 DATABASE_URL = os.environ.get(
     'DATABASE_URL',
-    'postgresql://postgres:KwachaSecure2026!@db.aeskkleinhyofnpfqnue.supabase.co:5432/postgres'
+    'postgresql://postgres:KwachaSecure2026!@aws-0-eu-west-1.pooler.supabase.com:6543/postgres'
 )
 
 

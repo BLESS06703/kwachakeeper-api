@@ -13,7 +13,7 @@ from src.models.user import User
 
 DATABASE_URL = os.environ.get(
     'DATABASE_URL',
-    'postgresql://postgres:KwachaSecure2026!@db.aeskkleinhyofnpfqnue.supabase.co:5432/postgres'
+    'postgresql://postgres:KwachaSecure2026!@aws-0-eu-west-1.pooler.supabase.com:6543/postgres'
 )
 JWT_SECRET = os.environ.get('JWT_SECRET', 'kwacha-keeper-secret-key-change-in-production')
 JWT_EXPIRY = 7 * 24 * 60 * 60
