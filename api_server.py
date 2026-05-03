@@ -138,13 +138,16 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 transactions = db.get_transactions()
                 self.send_response(200)
-                self.send_header('Content-Type', 'text/csv')
+                self.send_header('Content-Type', 'text/csv; charset=utf-8')
                 self.send_header('Content-Disposition', 'attachment; filename=kwachakeeper_transactions.csv')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
+                self.wfile.write('\ufeff'.encode())
                 self.wfile.write('Date,Type,Category,Amount,Description\n'.encode())
                 for t in transactions:
-                    self.wfile.write(f'{t.date.date()},{t.transaction_type.value},{t.category.value},{t.amount},{t.description}\n'.encode())
+                    desc = t.description.replace(',', ' ')
+                    line = f'{t.date.date()},{t.transaction_type.value},{t.category.value},{t.amount},{desc}\n'
+                    self.wfile.write(line.encode('utf-8'))
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
