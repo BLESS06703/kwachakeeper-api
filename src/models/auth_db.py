@@ -16,7 +16,7 @@ JWT_EXPIRY = 7 * 24 * 60 * 60  # 7 days in seconds
 class AuthDatabase:
     """Authentication database manager"""
     
-    def __init__(self, db_path: str = "kwacha_keeper.db"):
+    def __init__(self, db_path: str = "/opt/render/project/data/kwacha_keeper.db"):
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row

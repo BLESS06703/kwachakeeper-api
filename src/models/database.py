@@ -13,7 +13,7 @@ from .transaction import Transaction, TransactionType, Category
 class Database:
     """SQLite database manager for KwachaKeeper"""
     
-    def __init__(self, db_path: str = "kwacha_keeper.db"):
+    def __init__(self, db_path: str = "/opt/render/project/data/kwacha_keeper.db"):
         """Initialize database connection"""
         self.db_path = db_path
         self.conn = None
