@@ -31,7 +31,6 @@ class APIHandler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def _get_user_id(self):
-        """Extract user_id from Authorization header"""
         auth_header = self.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
@@ -42,8 +41,6 @@ class APIHandler(BaseHTTPRequestHandler):
     
     def do_OPTIONS(self):
         self._set_headers(200)
-    
-    # ─── AUTH ENDPOINTS ───────────────────────────
     
     def _handle_signup(self, data):
         email = data.get('email', '')
@@ -81,8 +78,6 @@ class APIHandler(BaseHTTPRequestHandler):
         else:
             self._set_headers(401)
             self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
-    
-    # ─── API ENDPOINTS ────────────────────────────
     
     def do_GET(self):
         if self.path == '/api/transactions':
@@ -145,6 +140,16 @@ class APIHandler(BaseHTTPRequestHandler):
             return
         elif self.path == '/auth/login':
             self._handle_login(post_data)
+            return
+        elif self.path == '/auth/verify':
+            token = post_data.get('token', '')
+            payload = auth_db.verify_token(token)
+            if payload:
+                self._set_headers(200)
+                self.wfile.write(json.dumps({'valid': True, 'user': payload}).encode())
+            else:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'valid': False}).encode())
             return
         
         # API routes
@@ -237,7 +242,7 @@ if __name__ == '__main__':
     server = HTTPServer(('0.0.0.0', port), APIHandler)
     print(f"KwachaKeeper API running on http://localhost:{port}")
     print(f"API Endpoints: /api/health, /api/balance, /api/summary, /api/transactions, /api/budgets")
-    print(f"Auth Endpoints: /auth/signup, /auth/login")
+    print(f"Auth Endpoints: /auth/signup, /auth/login, /auth/verify")
     
     try:
         server.serve_forever()
