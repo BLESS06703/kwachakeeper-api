@@ -1,17 +1,24 @@
 """
-KwachaKeeper API Server
-Connects React frontend to SQLite database
+KwachaKeeper - Unified API Server
+Handles transactions, budgets, and authentication
 """
 
 import json
 import sys
 import socket
+import jwt
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from src.models.database import Database
 from src.models.transaction import Transaction, TransactionType, Category
+from src.models.auth_db import AuthDatabase
+
+JWT_SECRET = "kwacha-keeper-secret-key-change-in-production"
 
 db = Database()
+auth_db = AuthDatabase()
+
 
 class APIHandler(BaseHTTPRequestHandler):
     
@@ -20,11 +27,62 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', content_type)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
+    
+    def _get_user_id(self):
+        """Extract user_id from Authorization header"""
+        auth_header = self.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+            payload = auth_db.verify_token(token)
+            if payload:
+                return payload.get('user_id')
+        return None
     
     def do_OPTIONS(self):
         self._set_headers(200)
+    
+    # ─── AUTH ENDPOINTS ───────────────────────────
+    
+    def _handle_signup(self, data):
+        email = data.get('email', '')
+        password = data.get('password', '')
+        
+        if not email or not password:
+            self._set_headers(400)
+            self.wfile.write(json.dumps({'error': 'Email and password required'}).encode())
+            return
+        
+        if len(password) < 6:
+            self._set_headers(400)
+            self.wfile.write(json.dumps({'error': 'Password must be at least 6 characters'}).encode())
+            return
+        
+        try:
+            user = auth_db.create_user(email, password)
+            token = auth_db.generate_token(user)
+            self._set_headers(201)
+            self.wfile.write(json.dumps({'user': user.to_dict(), 'token': token}).encode())
+        except Exception as e:
+            self._set_headers(400)
+            self.wfile.write(json.dumps({'error': 'Email already registered'}).encode())
+    
+    def _handle_login(self, data):
+        email = data.get('email', '')
+        password = data.get('password', '')
+        
+        token = auth_db.authenticate(email, password)
+        
+        if token:
+            user = auth_db.get_user_by_email(email)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({'user': user.to_dict(), 'token': token}).encode())
+        else:
+            self._set_headers(401)
+            self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
+    
+    # ─── API ENDPOINTS ────────────────────────────
     
     def do_GET(self):
         if self.path == '/api/transactions':
@@ -59,7 +117,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 cursor = db.conn.cursor()
                 cursor.execute(
-                    "SELECT category, amount FROM budgets WHERE month = ? AND year = ?", 
+                    "SELECT category, amount FROM budgets WHERE month = ? AND year = ?",
                     (datetime.now().month, datetime.now().year)
                 )
                 budgets = {row[0]: row[1] for row in cursor.fetchall()}
@@ -71,23 +129,27 @@ class APIHandler(BaseHTTPRequestHandler):
         
         elif self.path == '/api/health':
             self._set_headers(200)
-            self.wfile.write(json.dumps({'status': 'ok'}).encode())
+            self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
         
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
     
     def do_POST(self):
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
+        
+        # Auth routes
+        if self.path == '/auth/signup':
+            self._handle_signup(post_data)
+            return
+        elif self.path == '/auth/login':
+            self._handle_login(post_data)
+            return
+        
+        # API routes
         if self.path == '/api/transactions':
             try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                if content_length == 0:
-                    self._set_headers(400)
-                    self.wfile.write(json.dumps({'error': 'Empty request body'}).encode())
-                    return
-                
-                post_data = json.loads(self.rfile.read(content_length))
-                
                 transaction = Transaction(
                     id=None,
                     amount=float(post_data['amount']),
@@ -110,9 +172,6 @@ class APIHandler(BaseHTTPRequestHandler):
         
         elif self.path == '/api/budgets':
             try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = json.loads(self.rfile.read(content_length))
-                
                 db.set_budget(
                     datetime.now().month,
                     datetime.now().year,
@@ -143,7 +202,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 if cursor.rowcount > 0:
                     self._set_headers(200)
                     self.wfile.write(json.dumps({'status': 'deleted', 'id': tx_id}).encode())
-                    print(f"Transaction {tx_id} deleted")
                 else:
                     self._set_headers(404)
                     self.wfile.write(json.dumps({'error': 'Transaction not found'}).encode())
@@ -157,6 +215,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         print(f"[API] {args[0]}")
 
+
 def find_available_port(start_port=5000):
     for port in range(start_port, start_port + 10):
         try:
@@ -167,6 +226,7 @@ def find_available_port(start_port=5000):
             continue
     return None
 
+
 if __name__ == '__main__':
     port = find_available_port(5000)
     
@@ -176,15 +236,8 @@ if __name__ == '__main__':
     
     server = HTTPServer(('0.0.0.0', port), APIHandler)
     print(f"KwachaKeeper API running on http://localhost:{port}")
-    print(f"Endpoints:")
-    print(f"  GET    /api/health")
-    print(f"  GET    /api/balance")
-    print(f"  GET    /api/summary")
-    print(f"  GET    /api/transactions")
-    print(f"  GET    /api/budgets")
-    print(f"  POST   /api/transactions")
-    print(f"  POST   /api/budgets")
-    print(f"  DELETE /api/transactions/:id")
+    print(f"API Endpoints: /api/health, /api/balance, /api/summary, /api/transactions, /api/budgets")
+    print(f"Auth Endpoints: /auth/signup, /auth/login")
     
     try:
         server.serve_forever()
@@ -192,3 +245,4 @@ if __name__ == '__main__':
         print("\nServer stopped")
         server.server_close()
         db.close()
+        auth_db.close()
