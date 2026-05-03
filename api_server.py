@@ -142,12 +142,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.send_header('Content-Disposition', 'attachment; filename=kwachakeeper_transactions.csv')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write('\ufeff'.encode())
-                self.wfile.write('Date,Type,Category,Amount,Description\n'.encode())
+                csv_data = 'Date,Type,Category,Amount,Description\n'
                 for t in transactions:
-                    desc = t.description.replace(',', ' ')
-                    line = f'{t.date.date()},{t.transaction_type.value},{t.category.value},{t.amount},{desc}\n'
-                    self.wfile.write(line.encode('utf-8'))
+                    desc = t.description.replace(',', ' ').replace('\n', ' ')
+                    csv_data += f'{t.date.date()},{t.transaction_type.value},{t.category.value},{t.amount},{desc}\n'
+                self.wfile.write(csv_data.encode('utf-8'))
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
