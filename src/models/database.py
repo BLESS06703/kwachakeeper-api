@@ -4,8 +4,8 @@ Persistent storage on Supabase
 """
 
 import os
-import psycopg2
-import psycopg2.extras
+import psycopg
+from psycopg.rows import dict_row
 from datetime import datetime
 from typing import List, Optional
 from .transaction import Transaction, TransactionType, Category
@@ -20,7 +20,7 @@ class Database:
     """PostgreSQL database manager for KwachaKeeper"""
     
     def __init__(self):
-        self.conn = psycopg2.connect(DATABASE_URL)
+        self.conn = psycopg.connect(DATABASE_URL)
         self.conn.autocommit = True
         self._initialize_db()
     
@@ -109,7 +109,7 @@ class Database:
         
         query += " ORDER BY date DESC"
         
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor = self.conn.cursor(row_factory=dict_row)
         cursor.execute(query, params)
         
         transactions = []

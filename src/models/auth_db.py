@@ -4,8 +4,8 @@ User management and JWT token handling with PostgreSQL
 """
 
 import os
-import psycopg2
-import psycopg2.extras
+import psycopg
+from psycopg.rows import dict_row
 import jwt
 import time
 from datetime import datetime
@@ -23,7 +23,7 @@ class AuthDatabase:
     """Authentication database manager"""
     
     def __init__(self):
-        self.conn = psycopg2.connect(DATABASE_URL)
+        self.conn = psycopg.connect(DATABASE_URL)
         self.conn.autocommit = True
         self._initialize_db()
     
@@ -44,7 +44,7 @@ class AuthDatabase:
         """Create a new user"""
         password_hash, salt = User.hash_password(password)
         
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor = self.conn.cursor(row_factory=dict_row)
         cursor.execute('''
             INSERT INTO users (email, password_hash, salt, created_at)
             VALUES (%s, %s, %s, %s)
@@ -61,7 +61,7 @@ class AuthDatabase:
     
     def get_user_by_email(self, email: str) -> User:
         """Get user by email"""
-        cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor = self.conn.cursor(row_factory=dict_row)
         cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
         row = cursor.fetchone()
         
