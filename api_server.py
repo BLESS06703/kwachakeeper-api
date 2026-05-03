@@ -124,7 +124,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 cursor = db.conn.cursor()
                 cursor.execute(
-                    "SELECT category, amount FROM budgets WHERE month = %s AND year = %s",
+                    "SELECT category, amount FROM budgets WHERE month = ? AND year = ?",
                     (datetime.now().month, datetime.now().year)
                 )
                 budgets = {row[0]: row[1] for row in cursor.fetchall()}
@@ -224,8 +224,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 cursor = db.conn.cursor()
                 cursor.execute("""
                     UPDATE transactions 
-                    SET amount = %s, type = %s, category = %s, description = %s, date = %s
-                    WHERE id = %s
+                    SET amount = ?, type = ?, category = ?, description = ?, date = ?
+                    WHERE id = ?
                 """, (
                     float(put_data['amount']),
                     put_data['type'],
@@ -254,7 +254,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 tx_id = int(self.path.split('/')[-1])
                 cursor = db.conn.cursor()
-                cursor.execute("DELETE FROM transactions WHERE id = %s", (tx_id,))
+                cursor.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
                 db.conn.commit()
                 if cursor.rowcount > 0:
                     self._set_headers(200)
