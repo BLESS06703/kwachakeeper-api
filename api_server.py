@@ -10,6 +10,7 @@ import jwt
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 from src.models.database import Database
 from src.models.transaction import Transaction, TransactionType, Category
 from src.models.auth_db import AuthDatabase
@@ -80,9 +81,23 @@ class APIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
     
     def do_GET(self):
-        if self.path == '/api/transactions':
+        if self.path.startswith('/api/transactions'):
             try:
-                transactions = db.get_transactions()
+                query = urlparse(self.path).query
+                params = parse_qs(query) if query else {}
+                
+                start_date = None
+                end_date = None
+                
+                if 'start' in params:
+                    start_date = datetime.fromisoformat(params['start'][0])
+                if 'end' in params:
+                    end_date = datetime.fromisoformat(params['end'][0])
+                
+                transactions = db.get_transactions(
+                    start_date=start_date,
+                    end_date=end_date
+                )
                 self._set_headers(200)
                 self.wfile.write(json.dumps([t.to_dict() for t in transactions]).encode())
             except Exception as e:
@@ -112,7 +127,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 cursor = db.conn.cursor()
                 cursor.execute(
-                    "SELECT category, amount FROM budgets WHERE month = ? AND year = ?",
+                    "SELECT category, amount FROM budgets WHERE month = %s AND year = %s",
                     (datetime.now().month, datetime.now().year)
                 )
                 budgets = {row[0]: row[1] for row in cursor.fetchall()}
@@ -201,7 +216,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 tx_id = int(self.path.split('/')[-1])
                 cursor = db.conn.cursor()
-                cursor.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+                cursor.execute("DELETE FROM transactions WHERE id = %s", (tx_id,))
                 db.conn.commit()
                 
                 if cursor.rowcount > 0:
