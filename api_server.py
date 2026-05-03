@@ -94,10 +94,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 if 'end' in params:
                     end_date = datetime.fromisoformat(params['end'][0])
                 
-                transactions = db.get_transactions(
-                    start_date=start_date,
-                    end_date=end_date
-                )
+                transactions = db.get_transactions(start_date=start_date, end_date=end_date)
                 self._set_headers(200)
                 self.wfile.write(json.dumps([t.to_dict() for t in transactions]).encode())
             except Exception as e:
@@ -137,6 +134,21 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        elif self.path == '/api/export/csv':
+            try:
+                transactions = db.get_transactions()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/csv')
+                self.send_header('Content-Disposition', 'attachment; filename=kwachakeeper_transactions.csv')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write('Date,Type,Category,Amount,Description\n'.encode())
+                for t in transactions:
+                    self.wfile.write(f'{t.date.date()},{t.transaction_type.value},{t.category.value},{t.amount},{t.description}\n'.encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
         elif self.path == '/api/health':
             self._set_headers(200)
             self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
@@ -149,7 +161,6 @@ class APIHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
         
-        # Auth routes
         if self.path == '/auth/signup':
             self._handle_signup(post_data)
             return
@@ -167,7 +178,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'valid': False}).encode())
             return
         
-        # API routes
         if self.path == '/api/transactions':
             try:
                 transaction = Transaction(
@@ -178,14 +188,10 @@ class APIHandler(BaseHTTPRequestHandler):
                     description=post_data.get('description', ''),
                     date=datetime.fromisoformat(post_data['date']) if 'date' in post_data else datetime.now()
                 )
-                
                 tx_id = db.add_transaction(transaction)
                 transaction.id = tx_id
-                
                 self._set_headers(201)
                 self.wfile.write(json.dumps(transaction.to_dict()).encode())
-                print(f"Transaction saved: {transaction}")
-                
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
@@ -193,16 +199,11 @@ class APIHandler(BaseHTTPRequestHandler):
         elif self.path == '/api/budgets':
             try:
                 db.set_budget(
-                    datetime.now().month,
-                    datetime.now().year,
-                    post_data['category'],
-                    float(post_data['amount'])
+                    datetime.now().month, datetime.now().year,
+                    post_data['category'], float(post_data['amount'])
                 )
-                
                 self._set_headers(201)
                 self.wfile.write(json.dumps({'status': 'saved'}).encode())
-                print(f"Budget saved: {post_data['category']} = MK{post_data['amount']}")
-                
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
@@ -218,7 +219,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 cursor = db.conn.cursor()
                 cursor.execute("DELETE FROM transactions WHERE id = %s", (tx_id,))
                 db.conn.commit()
-                
                 if cursor.rowcount > 0:
                     self._set_headers(200)
                     self.wfile.write(json.dumps({'status': 'deleted', 'id': tx_id}).encode())
@@ -249,15 +249,12 @@ def find_available_port(start_port=5000):
 
 if __name__ == '__main__':
     port = find_available_port(5000)
-    
     if port is None:
         print("No available port found")
         sys.exit(1)
     
     server = HTTPServer(('0.0.0.0', port), APIHandler)
     print(f"KwachaKeeper API running on http://localhost:{port}")
-    print(f"API Endpoints: /api/health, /api/balance, /api/summary, /api/transactions, /api/budgets")
-    print(f"Auth Endpoints: /auth/signup, /auth/login, /auth/verify")
     
     try:
         server.serve_forever()
