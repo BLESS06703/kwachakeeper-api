@@ -8,6 +8,7 @@ import sys
 import socket
 import jwt
 import time
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
@@ -80,6 +81,69 @@ class APIHandler(BaseHTTPRequestHandler):
             self._set_headers(401)
             self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
     
+    def _generate_tip(self):
+        """Generate a financial tip based on spending patterns"""
+        now = datetime.now()
+        summary = db.get_monthly_summary(now.year, now.month)
+        transactions = db.get_transactions()
+        
+        total_income = summary['total_income']
+        total_expenses = summary['total_expenses']
+        expenses_by_cat = summary['expenses_by_category']
+        
+        tips = []
+        
+        # Calculate percentages
+        if total_expenses > 0 and total_income > 0:
+            expense_ratio = (total_expenses / total_income) * 100
+            
+            if expense_ratio > 80:
+                tips.append("Your expenses are over 80% of your income this month. Try to keep spending below 70% to build savings.")
+            elif expense_ratio < 30:
+                tips.append("You're saving a lot this month. Consider investing some of your savings to grow your wealth.")
+        
+        # Category-specific tips
+        for category, amount in expenses_by_cat.items():
+            pct = (amount / total_expenses * 100) if total_expenses > 0 else 0
+            
+            if category == 'Food & Groceries' and pct > 40:
+                tips.append("Food takes up a big portion of your budget. Buying in bulk at Shoprite or local markets can reduce costs.")
+            elif category == 'Transport (Minibus/Fuel)' and pct > 25:
+                tips.append("Transport costs are significant. Consider a monthly minibus pass or carpooling to save money.")
+            elif category == 'Airtime & Data' and pct > 15:
+                tips.append("You're spending a lot on airtime. TNM and Airtel offer monthly bundles that could save you up to 30%.")
+            elif category == 'Utilities (ESCOM/Water)' and amount > 50000:
+                tips.append("High utility bill detected. Switch to energy-saving bulbs and fix water leaks to reduce monthly costs.")
+        
+        # Savings tip
+        if total_income > 0:
+            savings = total_income - total_expenses
+            if savings <= 0:
+                tips.append("No savings this month. Start small: put aside MK5,000 each week into a separate account.")
+            elif savings < total_income * 0.1:
+                tips.append("You saved a bit this month. Aim to save at least 10% of your income for emergencies.")
+        
+        # Generic tips if no specific ones
+        if not tips:
+            generic_tips = [
+                "Track every expense, even small ones. They add up quickly.",
+                "Set aside an emergency fund of at least 3 months of expenses.",
+                "Review your subscriptions monthly and cancel what you don't use.",
+                "Plan your meals for the week to avoid impulse food purchases.",
+                "Use cash for daily expenses - it makes spending feel more real.",
+                "Compare prices before buying. A few minutes of research can save thousands.",
+                "Avoid buying airtime in small amounts. Bulk bundles are cheaper per MB.",
+                "Start a side hustle. Even MK20,000 extra per month makes a difference."
+            ]
+            tips.append(random.choice(generic_tips))
+        
+        return {
+            'tip': random.choice(tips),
+            'month': now.strftime('%B %Y'),
+            'total_income': total_income,
+            'total_expenses': total_expenses
+        }
+    
     def do_GET(self):
         if self.path.startswith('/api/transactions'):
             try:
@@ -116,6 +180,15 @@ class APIHandler(BaseHTTPRequestHandler):
                 summary = db.get_monthly_summary(now.year, now.month)
                 self._set_headers(200)
                 self.wfile.write(json.dumps(summary).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
+        elif self.path == '/api/tip':
+            try:
+                tip = self._generate_tip()
+                self._set_headers(200)
+                self.wfile.write(json.dumps(tip).encode())
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
