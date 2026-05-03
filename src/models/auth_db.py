@@ -1,30 +1,25 @@
 """
 KwachaKeeper - Authentication Database
-User management and JWT token handling with PostgreSQL
+User management and JWT token handling
 """
 
-import os
-import psycopg
-from psycopg.rows import dict_row
+import sqlite3
 import jwt
 import time
 from datetime import datetime
 from src.models.user import User
 
-DATABASE_URL = os.environ.get(
-    'DATABASE_URL',
-    'postgresql://postgres:KwachaSecure2026!@aws-0-eu-west-1.pooler.supabase.com:6543/postgres'
-)
-JWT_SECRET = os.environ.get('JWT_SECRET', 'kwacha-keeper-secret-key-change-in-production')
-JWT_EXPIRY = 7 * 24 * 60 * 60
+JWT_SECRET = "kwacha-keeper-secret-key-change-in-production"
+JWT_EXPIRY = 7 * 24 * 60 * 60  # 7 days in seconds
 
 
 class AuthDatabase:
     """Authentication database manager"""
     
-    def __init__(self):
-        self.conn = psycopg.connect(DATABASE_URL)
-        self.conn.autocommit = True
+    def __init__(self, db_path: str = "kwacha_keeper.db"):
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
         self._initialize_db()
     
     def _initialize_db(self):
@@ -32,28 +27,35 @@ class AuthDatabase:
         cursor = self.conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
         ''')
+        
+        # Add user_id to transactions table for multi-user support
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN user_id INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        self.conn.commit()
     
     def create_user(self, email: str, password: str) -> User:
         """Create a new user"""
         password_hash, salt = User.hash_password(password)
         
-        cursor = self.conn.cursor(row_factory=dict_row)
+        cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO users (email, password_hash, salt, created_at)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id
+            VALUES (?, ?, ?, ?)
         ''', (email, password_hash, salt, datetime.now().isoformat()))
-        user_id = cursor.fetchone()['id']
+        self.conn.commit()
         
         return User(
-            id=user_id,
+            id=cursor.lastrowid,
             email=email,
             password_hash=password_hash,
             salt=salt
@@ -61,8 +63,8 @@ class AuthDatabase:
     
     def get_user_by_email(self, email: str) -> User:
         """Get user by email"""
-        cursor = self.conn.cursor(row_factory=dict_row)
-        cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
         row = cursor.fetchone()
         
         if row:
