@@ -27,7 +27,7 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
     
@@ -210,6 +210,41 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        else:
+            self._set_headers(404)
+            self.wfile.write(json.dumps({'error': 'Not found'}).encode())
+    
+    def do_PUT(self):
+        if self.path.startswith('/api/transactions/'):
+            try:
+                tx_id = int(self.path.split('/')[-1])
+                content_length = int(self.headers.get('Content-Length', 0))
+                put_data = json.loads(self.rfile.read(content_length))
+                
+                cursor = db.conn.cursor()
+                cursor.execute("""
+                    UPDATE transactions 
+                    SET amount = %s, type = %s, category = %s, description = %s, date = %s
+                    WHERE id = %s
+                """, (
+                    float(put_data['amount']),
+                    put_data['type'],
+                    put_data['category'],
+                    put_data.get('description', ''),
+                    put_data.get('date', datetime.now().isoformat()),
+                    tx_id
+                ))
+                db.conn.commit()
+                
+                if cursor.rowcount > 0:
+                    self._set_headers(200)
+                    self.wfile.write(json.dumps({'status': 'updated', 'id': tx_id}).encode())
+                else:
+                    self._set_headers(404)
+                    self.wfile.write(json.dumps({'error': 'Transaction not found'}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
