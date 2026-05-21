@@ -82,10 +82,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
     
     def _generate_tip(self):
-        """Generate a financial tip based on spending patterns"""
         now = datetime.now()
         summary = db.get_monthly_summary(now.year, now.month)
-        transactions = db.get_transactions()
         
         total_income = summary['total_income']
         total_expenses = summary['total_expenses']
@@ -93,19 +91,15 @@ class APIHandler(BaseHTTPRequestHandler):
         
         tips = []
         
-        # Calculate percentages
         if total_expenses > 0 and total_income > 0:
             expense_ratio = (total_expenses / total_income) * 100
-            
             if expense_ratio > 80:
                 tips.append("Your expenses are over 80% of your income this month. Try to keep spending below 70% to build savings.")
             elif expense_ratio < 30:
                 tips.append("You're saving a lot this month. Consider investing some of your savings to grow your wealth.")
         
-        # Category-specific tips
         for category, amount in expenses_by_cat.items():
             pct = (amount / total_expenses * 100) if total_expenses > 0 else 0
-            
             if category == 'Food & Groceries' and pct > 40:
                 tips.append("Food takes up a big portion of your budget. Buying in bulk at Shoprite or local markets can reduce costs.")
             elif category == 'Transport (Minibus/Fuel)' and pct > 25:
@@ -115,7 +109,6 @@ class APIHandler(BaseHTTPRequestHandler):
             elif category == 'Utilities (ESCOM/Water)' and amount > 50000:
                 tips.append("High utility bill detected. Switch to energy-saving bulbs and fix water leaks to reduce monthly costs.")
         
-        # Savings tip
         if total_income > 0:
             savings = total_income - total_expenses
             if savings <= 0:
@@ -123,7 +116,6 @@ class APIHandler(BaseHTTPRequestHandler):
             elif savings < total_income * 0.1:
                 tips.append("You saved a bit this month. Aim to save at least 10% of your income for emergencies.")
         
-        # Generic tips if no specific ones
         if not tips:
             generic_tips = [
                 "Track every expense, even small ones. They add up quickly.",
@@ -149,15 +141,12 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 query = urlparse(self.path).query
                 params = parse_qs(query) if query else {}
-                
                 start_date = None
                 end_date = None
-                
                 if 'start' in params:
                     start_date = datetime.fromisoformat(params['start'][0])
                 if 'end' in params:
                     end_date = datetime.fromisoformat(params['end'][0])
-                
                 transactions = db.get_transactions(start_date=start_date, end_date=end_date)
                 self._set_headers(200)
                 self.wfile.write(json.dumps([t.to_dict() for t in transactions]).encode())
@@ -220,6 +209,91 @@ class APIHandler(BaseHTTPRequestHandler):
                     desc = t.description.replace(',', ' ').replace('\n', ' ')
                     csv_data += f'{t.date.date()},{t.transaction_type.value},{t.category.value},{t.amount},{desc}\n'
                 self.wfile.write(csv_data.encode('utf-8'))
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
+        elif self.path == '/api/report/pdf':
+            try:
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+                from reportlab.lib.units import mm
+                import io
+                
+                now = datetime.now()
+                summary = db.get_monthly_summary(now.year, now.month)
+                transactions = db.get_transactions()
+                
+                buf = io.BytesIO()
+                doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm)
+                styles = getSampleStyleSheet()
+                elements = []
+                
+                title_style = ParagraphStyle('Title', fontSize=22, textColor=colors.HexColor('#1e3a5f'), spaceAfter=6)
+                subtitle_style = ParagraphStyle('Subtitle', fontSize=12, textColor=colors.HexColor('#64748b'), spaceAfter=20)
+                
+                elements.append(Paragraph('KwachaKeeper', title_style))
+                elements.append(Paragraph(f'Monthly Report - {now.strftime("%B %Y")}', subtitle_style))
+                elements.append(Spacer(1, 10))
+                
+                summary_data = [
+                    ['Balance', 'Income', 'Expenses', 'Net Savings'],
+                    [f'MK {summary["total_income"] - summary["total_expenses"]:,.2f}',
+                     f'MK {summary["total_income"]:,.2f}',
+                     f'MK {summary["total_expenses"]:,.2f}',
+                     f'MK {summary["net_savings"]:,.2f}']
+                ]
+                summary_table = Table(summary_data, colWidths=[120, 120, 120, 120])
+                summary_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#6366f1')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 11),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                    ('TOPPADDING', (0, 0), (-1, 0), 10),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8fafc')),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                ]))
+                elements.append(summary_table)
+                elements.append(Spacer(1, 20))
+                
+                elements.append(Paragraph('Transactions', styles['Heading2']))
+                elements.append(Spacer(1, 8))
+                
+                tx_data = [['Date', 'Type', 'Category', 'Amount', 'Description']]
+                for t in transactions[:30]:
+                    tx_data.append([
+                        str(t.date.date()),
+                        t.transaction_type.value.capitalize(),
+                        t.category.value[:25],
+                        f'MK {t.amount:,.2f}',
+                        t.description[:30]
+                    ])
+                
+                tx_table = Table(tx_data, colWidths=[80, 55, 120, 100, 145])
+                tx_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e293b')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                    ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 9),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                    ('TOPPADDING', (0, 0), (-1, 0), 8),
+                    ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#cbd5e1')),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+                ]))
+                elements.append(tx_table)
+                
+                doc.build(elements)
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/pdf')
+                self.send_header('Content-Disposition', f'attachment; filename=kwachakeeper_report_{now.strftime("%B_%Y")}.pdf')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(buf.getvalue())
+                buf.close()
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
@@ -293,7 +367,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 tx_id = int(self.path.split('/')[-1])
                 content_length = int(self.headers.get('Content-Length', 0))
                 put_data = json.loads(self.rfile.read(content_length))
-                
                 cursor = db.conn.cursor()
                 cursor.execute("""
                     UPDATE transactions 
@@ -308,7 +381,6 @@ class APIHandler(BaseHTTPRequestHandler):
                     tx_id
                 ))
                 db.conn.commit()
-                
                 if cursor.rowcount > 0:
                     self._set_headers(200)
                     self.wfile.write(json.dumps({'status': 'updated', 'id': tx_id}).encode())
