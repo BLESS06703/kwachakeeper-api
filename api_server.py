@@ -1,6 +1,6 @@
 """
 KwachaKeeper - Unified API Server
-Handles transactions, budgets, authentication, reports, and recurring
+Handles transactions, budgets, authentication, reports, recurring, and goals
 """
 
 import json
@@ -198,6 +198,22 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        elif self.path == '/api/goals':
+            try:
+                cursor = db.conn.cursor()
+                cursor.execute("SELECT * FROM savings_goals ORDER BY created_at DESC")
+                goals = []
+                for row in cursor.fetchall():
+                    goals.append({
+                        'id': row[0], 'name': row[1], 'target_amount': row[2],
+                        'current_amount': row[3], 'deadline': row[4], 'created_at': row[5]
+                    })
+                self._set_headers(200)
+                self.wfile.write(json.dumps(goals).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
         elif self.path == '/api/export/csv':
             try:
                 transactions = db.get_transactions()
@@ -347,17 +363,40 @@ class APIHandler(BaseHTTPRequestHandler):
                     INSERT INTO recurring (amount, type, category, description, frequency, next_date, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    float(post_data['amount']),
-                    post_data['type'],
-                    post_data['category'],
-                    post_data.get('description', ''),
-                    post_data.get('frequency', 'monthly'),
-                    post_data.get('next_date', datetime.now().isoformat()),
-                    datetime.now().isoformat()
+                    float(post_data['amount']), post_data['type'], post_data['category'],
+                    post_data.get('description', ''), post_data.get('frequency', 'monthly'),
+                    post_data.get('next_date', datetime.now().isoformat()), datetime.now().isoformat()
                 ))
                 db.conn.commit()
                 self._set_headers(201)
                 self.wfile.write(json.dumps({'status': 'created', 'id': cursor.lastrowid}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
+        elif self.path == '/api/goals':
+            try:
+                cursor = db.conn.cursor()
+                cursor.execute("""
+                    INSERT INTO savings_goals (name, target_amount, current_amount, deadline, created_at)
+                    VALUES (?, ?, 0, ?, ?)
+                """, (post_data['name'], float(post_data['target_amount']), post_data.get('deadline', ''), datetime.now().isoformat()))
+                db.conn.commit()
+                self._set_headers(201)
+                self.wfile.write(json.dumps({'status': 'created', 'id': cursor.lastrowid}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
+        elif self.path.startswith('/api/goals/') and self.path.endswith('/add'):
+            try:
+                goal_id = int(self.path.split('/')[-2])
+                cursor = db.conn.cursor()
+                cursor.execute("UPDATE savings_goals SET current_amount = current_amount + ? WHERE id = ?",
+                             (float(post_data.get('amount', 0)), goal_id))
+                db.conn.commit()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({'status': 'updated'}).encode())
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
@@ -411,6 +450,17 @@ class APIHandler(BaseHTTPRequestHandler):
                 rec_id = int(self.path.split('/')[-1])
                 cursor = db.conn.cursor()
                 cursor.execute("DELETE FROM recurring WHERE id = ?", (rec_id,))
+                db.conn.commit()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({'status': 'deleted'}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        elif self.path.startswith('/api/goals/'):
+            try:
+                goal_id = int(self.path.split('/')[-1])
+                cursor = db.conn.cursor()
+                cursor.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
                 db.conn.commit()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({'status': 'deleted'}).encode())
