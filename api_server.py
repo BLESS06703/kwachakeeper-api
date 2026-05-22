@@ -1,6 +1,6 @@
 """
 KwachaKeeper - Unified API Server
-Handles transactions, budgets, and authentication
+Handles transactions, budgets, authentication, reports, and recurring
 """
 
 import json
@@ -47,17 +47,14 @@ class APIHandler(BaseHTTPRequestHandler):
     def _handle_signup(self, data):
         email = data.get('email', '')
         password = data.get('password', '')
-        
         if not email or not password:
             self._set_headers(400)
             self.wfile.write(json.dumps({'error': 'Email and password required'}).encode())
             return
-        
         if len(password) < 6:
             self._set_headers(400)
             self.wfile.write(json.dumps({'error': 'Password must be at least 6 characters'}).encode())
             return
-        
         try:
             user = auth_db.create_user(email, password)
             token = auth_db.generate_token(user)
@@ -70,9 +67,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def _handle_login(self, data):
         email = data.get('email', '')
         password = data.get('password', '')
-        
         token = auth_db.authenticate(email, password)
-        
         if token:
             user = auth_db.get_user_by_email(email)
             self._set_headers(200)
@@ -84,20 +79,16 @@ class APIHandler(BaseHTTPRequestHandler):
     def _generate_tip(self):
         now = datetime.now()
         summary = db.get_monthly_summary(now.year, now.month)
-        
         total_income = summary['total_income']
         total_expenses = summary['total_expenses']
         expenses_by_cat = summary['expenses_by_category']
-        
         tips = []
-        
         if total_expenses > 0 and total_income > 0:
             expense_ratio = (total_expenses / total_income) * 100
             if expense_ratio > 80:
                 tips.append("Your expenses are over 80% of your income this month. Try to keep spending below 70% to build savings.")
             elif expense_ratio < 30:
                 tips.append("You're saving a lot this month. Consider investing some of your savings to grow your wealth.")
-        
         for category, amount in expenses_by_cat.items():
             pct = (amount / total_expenses * 100) if total_expenses > 0 else 0
             if category == 'Food & Groceries' and pct > 40:
@@ -108,14 +99,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 tips.append("You're spending a lot on airtime. TNM and Airtel offer monthly bundles that could save you up to 30%.")
             elif category == 'Utilities (ESCOM/Water)' and amount > 50000:
                 tips.append("High utility bill detected. Switch to energy-saving bulbs and fix water leaks to reduce monthly costs.")
-        
         if total_income > 0:
             savings = total_income - total_expenses
             if savings <= 0:
                 tips.append("No savings this month. Start small: put aside MK5,000 each week into a separate account.")
             elif savings < total_income * 0.1:
                 tips.append("You saved a bit this month. Aim to save at least 10% of your income for emergencies.")
-        
         if not tips:
             generic_tips = [
                 "Track every expense, even small ones. They add up quickly.",
@@ -128,7 +117,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 "Start a side hustle. Even MK20,000 extra per month makes a difference."
             ]
             tips.append(random.choice(generic_tips))
-        
         return {
             'tip': random.choice(tips),
             'month': now.strftime('%B %Y'),
@@ -185,13 +173,27 @@ class APIHandler(BaseHTTPRequestHandler):
         elif self.path == '/api/budgets':
             try:
                 cursor = db.conn.cursor()
-                cursor.execute(
-                    "SELECT category, amount FROM budgets WHERE month = ? AND year = ?",
-                    (datetime.now().month, datetime.now().year)
-                )
+                cursor.execute("SELECT category, amount FROM budgets WHERE month = ? AND year = ?", (datetime.now().month, datetime.now().year))
                 budgets = {row[0]: row[1] for row in cursor.fetchall()}
                 self._set_headers(200)
                 self.wfile.write(json.dumps(budgets).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
+        elif self.path == '/api/recurring':
+            try:
+                cursor = db.conn.cursor()
+                cursor.execute("SELECT * FROM recurring ORDER BY next_date")
+                recurring = []
+                for row in cursor.fetchall():
+                    recurring.append({
+                        'id': row[0], 'amount': row[1], 'type': row[2],
+                        'category': row[3], 'description': row[4],
+                        'frequency': row[5], 'next_date': row[6]
+                    })
+                self._set_headers(200)
+                self.wfile.write(json.dumps(recurring).encode())
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
@@ -221,23 +223,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
                 from reportlab.lib.units import mm
                 import io
-                
                 now = datetime.now()
                 summary = db.get_monthly_summary(now.year, now.month)
                 transactions = db.get_transactions()
-                
                 buf = io.BytesIO()
                 doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm)
                 styles = getSampleStyleSheet()
                 elements = []
-                
                 title_style = ParagraphStyle('Title', fontSize=22, textColor=colors.HexColor('#1e3a5f'), spaceAfter=6)
                 subtitle_style = ParagraphStyle('Subtitle', fontSize=12, textColor=colors.HexColor('#64748b'), spaceAfter=20)
-                
                 elements.append(Paragraph('KwachaKeeper', title_style))
                 elements.append(Paragraph(f'Monthly Report - {now.strftime("%B %Y")}', subtitle_style))
                 elements.append(Spacer(1, 10))
-                
                 summary_data = [
                     ['Balance', 'Income', 'Expenses', 'Net Savings'],
                     [f'MK {summary["total_income"] - summary["total_expenses"]:,.2f}',
@@ -258,20 +255,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 ]))
                 elements.append(summary_table)
                 elements.append(Spacer(1, 20))
-                
                 elements.append(Paragraph('Transactions', styles['Heading2']))
                 elements.append(Spacer(1, 8))
-                
                 tx_data = [['Date', 'Type', 'Category', 'Amount', 'Description']]
                 for t in transactions[:30]:
-                    tx_data.append([
-                        str(t.date.date()),
-                        t.transaction_type.value.capitalize(),
-                        t.category.value[:25],
-                        f'MK {t.amount:,.2f}',
-                        t.description[:30]
-                    ])
-                
+                    tx_data.append([str(t.date.date()), t.transaction_type.value.capitalize(), t.category.value[:25], f'MK {t.amount:,.2f}', t.description[:30]])
                 tx_table = Table(tx_data, colWidths=[80, 55, 120, 100, 145])
                 tx_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e293b')),
@@ -284,9 +272,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
                 ]))
                 elements.append(tx_table)
-                
                 doc.build(elements)
-                
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/pdf')
                 self.send_header('Content-Disposition', f'attachment; filename=kwachakeeper_report_{now.strftime("%B_%Y")}.pdf')
@@ -347,12 +333,31 @@ class APIHandler(BaseHTTPRequestHandler):
         
         elif self.path == '/api/budgets':
             try:
-                db.set_budget(
-                    datetime.now().month, datetime.now().year,
-                    post_data['category'], float(post_data['amount'])
-                )
+                db.set_budget(datetime.now().month, datetime.now().year, post_data['category'], float(post_data['amount']))
                 self._set_headers(201)
                 self.wfile.write(json.dumps({'status': 'saved'}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+        
+        elif self.path == '/api/recurring':
+            try:
+                cursor = db.conn.cursor()
+                cursor.execute("""
+                    INSERT INTO recurring (amount, type, category, description, frequency, next_date, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    float(post_data['amount']),
+                    post_data['type'],
+                    post_data['category'],
+                    post_data.get('description', ''),
+                    post_data.get('frequency', 'monthly'),
+                    post_data.get('next_date', datetime.now().isoformat()),
+                    datetime.now().isoformat()
+                ))
+                db.conn.commit()
+                self._set_headers(201)
+                self.wfile.write(json.dumps({'status': 'created', 'id': cursor.lastrowid}).encode())
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
@@ -369,17 +374,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 put_data = json.loads(self.rfile.read(content_length))
                 cursor = db.conn.cursor()
                 cursor.execute("""
-                    UPDATE transactions 
-                    SET amount = ?, type = ?, category = ?, description = ?, date = ?
-                    WHERE id = ?
-                """, (
-                    float(put_data['amount']),
-                    put_data['type'],
-                    put_data['category'],
-                    put_data.get('description', ''),
-                    put_data.get('date', datetime.now().isoformat()),
-                    tx_id
-                ))
+                    UPDATE transactions SET amount = ?, type = ?, category = ?, description = ?, date = ? WHERE id = ?
+                """, (float(put_data['amount']), put_data['type'], put_data['category'], put_data.get('description', ''), put_data.get('date', datetime.now().isoformat()), tx_id))
                 db.conn.commit()
                 if cursor.rowcount > 0:
                     self._set_headers(200)
@@ -410,6 +406,17 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
+        elif self.path.startswith('/api/recurring/'):
+            try:
+                rec_id = int(self.path.split('/')[-1])
+                cursor = db.conn.cursor()
+                cursor.execute("DELETE FROM recurring WHERE id = ?", (rec_id,))
+                db.conn.commit()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({'status': 'deleted'}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
@@ -434,10 +441,8 @@ if __name__ == '__main__':
     if port is None:
         print("No available port found")
         sys.exit(1)
-    
     server = HTTPServer(('0.0.0.0', port), APIHandler)
     print(f"KwachaKeeper API running on http://localhost:{port}")
-    
     try:
         server.serve_forever()
     except KeyboardInterrupt:
