@@ -64,6 +64,19 @@ class Database:
             )
         ''')
         
+        # Recurring transactions table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS recurring (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL NOT NULL,
+                type TEXT NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                frequency TEXT NOT NULL DEFAULT 'monthly',
+                next_date TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
         self.conn.commit()
     
     def add_transaction(self, transaction: Transaction) -> int:
@@ -80,6 +93,19 @@ class Database:
             transaction.date.isoformat(),
             transaction.created_at.isoformat()
         ))
+        # Recurring transactions table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS recurring (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL NOT NULL,
+                type TEXT NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                frequency TEXT NOT NULL DEFAULT 'monthly',
+                next_date TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
         self.conn.commit()
         return cursor.lastrowid
     
@@ -193,6 +219,19 @@ class Database:
             INSERT OR REPLACE INTO budgets (month, year, category, amount, created_at)
             VALUES (?, ?, ?, ?, ?)
         ''', (month, year, category, amount, datetime.now().isoformat()))
+        # Recurring transactions table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS recurring (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL NOT NULL,
+                type TEXT NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                frequency TEXT NOT NULL DEFAULT 'monthly',
+                next_date TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
         self.conn.commit()
     
     def get_budget_status(self, year: int, month: int) -> dict:
