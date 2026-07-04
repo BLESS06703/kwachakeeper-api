@@ -1,6 +1,6 @@
 """
 KwachaKeeper - Unified API Server
-Multi-tenant secure API with JWT authentication
+Multi-tenant secure API with JWT auth, rate limiting, and password policies
 """
 
 import json
@@ -9,17 +9,33 @@ import socket
 import jwt
 import time
 import random
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from src.models.database import Database
 from src.models.transaction import Transaction, TransactionType, Category
 from src.models.auth_db import AuthDatabase
+from src.models.rate_limiter import login_limiter, signup_limiter
 
 JWT_SECRET = "kwacha-keeper-secret-key-change-in-production"
+JWT_REFRESH_EXPIRY = 30 * 24 * 60 * 60  # 30 days
 
 db = Database()
 auth_db = AuthDatabase()
+
+
+def validate_password(password: str) -> str:
+    """Validate password strength. Returns error message or empty string."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters"
+    if not re.search(r'[A-Z]', password):
+        return "Password must contain at least one uppercase letter"
+    if not re.search(r'[a-z]', password):
+        return "Password must contain at least one lowercase letter"
+    if not re.search(r'[0-9]', password):
+        return "Password must contain at least one number"
+    return ""
 
 
 class APIHandler(BaseHTTPRequestHandler):
@@ -32,8 +48,15 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
     
+    def _get_client_ip(self):
+        """Get client IP address"""
+        forwarded = self.headers.get('X-Forwarded-For', '')
+        if forwarded:
+            return forwarded.split(',')[0].strip()
+        return self.client_address[0]
+    
     def _get_tenant_id(self):
-        """Extract tenant_id from Authorization header. Returns None if invalid."""
+        """Extract tenant_id from Authorization header"""
         auth_header = self.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
@@ -42,48 +65,86 @@ class APIHandler(BaseHTTPRequestHandler):
                 return payload.get('tenant_id')
         return None
     
-    def _require_tenant(self):
-        """Get tenant_id or return 401 error"""
-        tenant_id = self._get_tenant_id()
-        if tenant_id is None:
-            self._set_headers(401)
-            self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
-        return tenant_id
-    
     def do_OPTIONS(self):
         self._set_headers(200)
     
     def _handle_signup(self, data):
-        email = data.get('email', '')
+        email = data.get('email', '').strip().lower()
         password = data.get('password', '')
+        client_ip = self._get_client_ip()
+        
         if not email or not password:
             self._set_headers(400)
             self.wfile.write(json.dumps({'error': 'Email and password required'}).encode())
             return
-        if len(password) < 6:
+        
+        # Password strength check
+        password_error = validate_password(password)
+        if password_error:
             self._set_headers(400)
-            self.wfile.write(json.dumps({'error': 'Password must be at least 6 characters'}).encode())
+            self.wfile.write(json.dumps({'error': password_error}).encode())
             return
+        
+        # Rate limiting
+        if not signup_limiter.is_allowed(client_ip):
+            self._set_headers(429)
+            self.wfile.write(json.dumps({
+                'error': 'Too many signup attempts. Try again later.',
+                'retry_after': '2 minutes'
+            }).encode())
+            return
+        
         try:
             user = auth_db.create_user(email, password)
             token = auth_db.generate_token(user)
+            refresh_token = auth_db.generate_refresh_token(user)
             self._set_headers(201)
-            self.wfile.write(json.dumps({'user': user.to_dict(), 'token': token}).encode())
+            self.wfile.write(json.dumps({
+                'user': user.to_dict(),
+                'token': token,
+                'refresh_token': refresh_token
+            }).encode())
         except Exception as e:
             self._set_headers(400)
             self.wfile.write(json.dumps({'error': 'Email already registered'}).encode())
     
     def _handle_login(self, data):
-        email = data.get('email', '')
+        email = data.get('email', '').strip().lower()
         password = data.get('password', '')
+        client_ip = self._get_client_ip()
+        
+        if not email or not password:
+            self._set_headers(400)
+            self.wfile.write(json.dumps({'error': 'Email and password required'}).encode())
+            return
+        
+        # Rate limiting
+        if not login_limiter.is_allowed(client_ip):
+            remaining = login_limiter.remaining(client_ip)
+            self._set_headers(429)
+            self.wfile.write(json.dumps({
+                'error': f'Too many login attempts. {remaining} attempts remaining.',
+                'retry_after': '1 minute'
+            }).encode())
+            return
+        
         token = auth_db.authenticate(email, password)
         if token:
+            login_limiter.reset(client_ip)
             user = auth_db.get_user_by_email(email)
+            refresh_token = auth_db.generate_refresh_token(user)
             self._set_headers(200)
-            self.wfile.write(json.dumps({'user': user.to_dict(), 'token': token}).encode())
+            self.wfile.write(json.dumps({
+                'user': user.to_dict(),
+                'token': token,
+                'refresh_token': refresh_token
+            }).encode())
         else:
             self._set_headers(401)
-            self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
+            self.wfile.write(json.dumps({
+                'error': 'Invalid email or password',
+                'attempts_remaining': login_limiter.remaining(client_ip)
+            }).encode())
     
     def _generate_tip(self, tenant_id):
         now = datetime.now()
@@ -105,20 +166,20 @@ class APIHandler(BaseHTTPRequestHandler):
             elif category == 'Transport (Minibus/Fuel)' and pct > 25:
                 tips.append("Transport costs are high. Consider a monthly minibus pass.")
             elif category == 'Airtime & Data' and pct > 15:
-                tips.append("You're spending a lot on airtime. Monthly bundles save up to 30%.")
+                tips.append("Monthly bundles save up to 30% on airtime.")
         if total_income > 0:
             savings = total_income - total_expenses
             if savings <= 0:
-                tips.append("No savings this month. Start small: MK5,000 each week.")
+                tips.append("No savings this month. Start with MK5,000 weekly.")
             elif savings < total_income * 0.1:
-                tips.append("Aim to save at least 10% of your income for emergencies.")
+                tips.append("Aim to save at least 10% of your income.")
         if not tips:
             generic_tips = [
-                "Track every expense, even small ones. They add up quickly.",
-                "Set aside an emergency fund of at least 3 months of expenses.",
-                "Plan your meals for the week to avoid impulse food purchases.",
+                "Track every expense. Small ones add up quickly.",
+                "Set aside an emergency fund of 3 months of expenses.",
+                "Plan meals for the week to avoid impulse purchases.",
                 "Compare prices before buying. Research saves thousands.",
-                "Start a side hustle. Even MK20,000 extra makes a difference."
+                "Start a side hustle. Extra MK20,000 makes a difference."
             ]
             tips.append(random.choice(generic_tips))
         return {
@@ -129,7 +190,7 @@ class APIHandler(BaseHTTPRequestHandler):
         }
     
     def do_GET(self):
-        tenant_id = self._get_tenant_id()  # Optional for public endpoints
+        tenant_id = self._get_tenant_id()
         
         if self.path.startswith('/api/transactions'):
             if not tenant_id:
@@ -145,11 +206,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     start_date = datetime.fromisoformat(params['start'][0])
                 if 'end' in params:
                     end_date = datetime.fromisoformat(params['end'][0])
-                transactions = db.get_transactions(
-                    tenant_id=tenant_id,
-                    start_date=start_date,
-                    end_date=end_date
-                )
+                transactions = db.get_transactions(tenant_id=tenant_id, start_date=start_date, end_date=end_date)
                 self._set_headers(200)
                 self.wfile.write(json.dumps([t.to_dict() for t in transactions]).encode())
             except Exception as e:
@@ -349,23 +406,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
-        elif self.path == '/api/reset-db':
-            try:
-                cursor = db.conn.cursor()
-                cursor.execute("DROP TABLE IF EXISTS transactions")
-                cursor.execute("DROP TABLE IF EXISTS budgets")
-                cursor.execute("DROP TABLE IF EXISTS savings_goals")
-                cursor.execute("DROP TABLE IF EXISTS recurring")
-                cursor.execute("DROP TABLE IF EXISTS users")
-                cursor.execute("DROP TABLE IF EXISTS tenants")
-                db.conn.commit()
-                db._initialize_db()
-                auth_db._initialize_db()
-                self._set_headers(200)
-                self.wfile.write(json.dumps({"status": "Database reset complete"}).encode())
-            except Exception as e:
-                self._set_headers(500)
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
         elif self.path == '/api/health':
             self._set_headers(200)
             self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
@@ -378,12 +418,24 @@ class APIHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
         
-        # Auth routes (no tenant required)
         if self.path == '/auth/signup':
             self._handle_signup(post_data)
             return
         elif self.path == '/auth/login':
             self._handle_login(post_data)
+            return
+        elif self.path == '/auth/refresh':
+            token = post_data.get('refresh_token', '')
+            payload = auth_db.verify_token(token)
+            if payload:
+                user = auth_db.get_user_by_email(payload.get('email', ''))
+                if user:
+                    new_token = auth_db.generate_token(user)
+                    self._set_headers(200)
+                    self.wfile.write(json.dumps({'token': new_token}).encode())
+                    return
+            self._set_headers(401)
+            self.wfile.write(json.dumps({'error': 'Invalid refresh token'}).encode())
             return
         elif self.path == '/auth/verify':
             token = post_data.get('token', '')
@@ -396,7 +448,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'valid': False}).encode())
             return
         
-        # All other routes require tenant
         tenant_id = self._get_tenant_id()
         if not tenant_id:
             self._set_headers(401)
