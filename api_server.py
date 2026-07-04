@@ -69,11 +69,8 @@ class APIHandler(BaseHTTPRequestHandler):
             user = auth_db.create_user(email, password)
             token = auth_db.generate_token(user)
             refresh = auth_db.generate_refresh_token(user)
+            db.create_wallet(user.tenant_id, 'Main Wallet', 'cash', 'fa-wallet', '#4CAF50')
             # Create default wallets for new user
-            db.create_wallet(user.tenant_id, 'Cash', 'cash', 'fa-money-bill', '#4CAF50')
-            db.create_wallet(user.tenant_id, 'Bank Account', 'bank', 'fa-building-columns', '#2196F3')
-            db.create_wallet(user.tenant_id, 'Airtel Money', 'mobile', 'fa-mobile-screen', '#F44336')
-            db.create_wallet(user.tenant_id, 'TNM Mpamba', 'mobile', 'fa-mobile-screen', '#FF9800')
             self._set_headers(201)
             self.wfile.write(json.dumps({'user': user.to_dict(), 'token': token, 'refresh_token': refresh}).encode())
         except Exception as e:
@@ -89,6 +86,7 @@ class APIHandler(BaseHTTPRequestHandler):
             login_limiter.reset(self._get_client_ip())
             user = auth_db.get_user_by_email(email)
             refresh = auth_db.generate_refresh_token(user)
+            db.create_wallet(user.tenant_id, 'Main Wallet', 'cash', 'fa-wallet', '#4CAF50')
             self._set_headers(200)
             self.wfile.write(json.dumps({'user': user.to_dict(), 'token': token, 'refresh_token': refresh}).encode())
         else:
