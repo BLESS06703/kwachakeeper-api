@@ -349,6 +349,23 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        elif self.path == '/api/reset-db':
+            try:
+                cursor = db.conn.cursor()
+                cursor.execute("DROP TABLE IF EXISTS transactions")
+                cursor.execute("DROP TABLE IF EXISTS budgets")
+                cursor.execute("DROP TABLE IF EXISTS savings_goals")
+                cursor.execute("DROP TABLE IF EXISTS recurring")
+                cursor.execute("DROP TABLE IF EXISTS users")
+                cursor.execute("DROP TABLE IF EXISTS tenants")
+                db.conn.commit()
+                db._initialize_db()
+                auth_db._initialize_db()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"status": "Database reset complete"}).encode())
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
         elif self.path == '/api/health':
             self._set_headers(200)
             self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
