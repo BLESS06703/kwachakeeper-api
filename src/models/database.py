@@ -1,3 +1,4 @@
+from src.models.encryption import encrypt, decrypt
 """
 KwachaKeeper - SQLite Database Manager
 Multi-tenant secure database with tenant isolation
@@ -113,7 +114,7 @@ class Database:
             transaction.amount,
             transaction.transaction_type.value,
             transaction.category.value,
-            transaction.description,
+            encrypt(transaction.description),
             transaction.date.isoformat(),
             transaction.created_at.isoformat()
         ))
@@ -152,7 +153,9 @@ class Database:
         
         transactions = []
         for row in cursor.fetchall():
-            transactions.append(Transaction.from_dict(dict(row)))
+            row_dict = dict(row)
+            row_dict["description"] = decrypt(row_dict.get("description", ""))
+            transactions.append(Transaction.from_dict(row_dict))
         
         return transactions
     
