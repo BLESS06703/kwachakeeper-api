@@ -43,7 +43,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def _set_headers(self, status=200, content_type='application/json'):
         self.send_response(status)
         self.send_header('Content-Type', content_type)
-        self.send_header('Access-Control-Allow-Origin', 'https://kwachakeeper.netlify.app')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
@@ -322,7 +322,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/csv; charset=utf-8')
                 self.send_header('Content-Disposition', 'attachment; filename=kwachakeeper_transactions.csv')
-                self.send_header('Access-Control-Allow-Origin', 'https://kwachakeeper.netlify.app')
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 csv_data = 'Date,Type,Category,Amount,Description\n'
                 for t in transactions:
@@ -398,7 +398,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/pdf')
                 self.send_header('Content-Disposition', f'attachment; filename=kwachakeeper_report_{now.strftime("%B_%Y")}.pdf')
-                self.send_header('Access-Control-Allow-Origin', 'https://kwachakeeper.netlify.app')
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(buf.getvalue())
                 buf.close()
