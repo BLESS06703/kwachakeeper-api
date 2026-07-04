@@ -1,6 +1,6 @@
 """
 KwachaKeeper - Unified API Server
-Handles transactions, budgets, authentication, reports, recurring, and goals
+Multi-tenant secure API with JWT authentication
 """
 
 import json
@@ -32,14 +32,23 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
     
-    def _get_user_id(self):
+    def _get_tenant_id(self):
+        """Extract tenant_id from Authorization header. Returns None if invalid."""
         auth_header = self.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
             payload = auth_db.verify_token(token)
             if payload:
-                return payload.get('user_id')
+                return payload.get('tenant_id')
         return None
+    
+    def _require_tenant(self):
+        """Get tenant_id or return 401 error"""
+        tenant_id = self._get_tenant_id()
+        if tenant_id is None:
+            self._set_headers(401)
+            self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+        return tenant_id
     
     def do_OPTIONS(self):
         self._set_headers(200)
@@ -76,9 +85,9 @@ class APIHandler(BaseHTTPRequestHandler):
             self._set_headers(401)
             self.wfile.write(json.dumps({'error': 'Invalid email or password'}).encode())
     
-    def _generate_tip(self):
+    def _generate_tip(self, tenant_id):
         now = datetime.now()
-        summary = db.get_monthly_summary(now.year, now.month)
+        summary = db.get_monthly_summary(now.year, now.month, tenant_id)
         total_income = summary['total_income']
         total_expenses = summary['total_expenses']
         expenses_by_cat = summary['expenses_by_category']
@@ -86,35 +95,30 @@ class APIHandler(BaseHTTPRequestHandler):
         if total_expenses > 0 and total_income > 0:
             expense_ratio = (total_expenses / total_income) * 100
             if expense_ratio > 80:
-                tips.append("Your expenses are over 80% of your income this month. Try to keep spending below 70% to build savings.")
+                tips.append("Your expenses are over 80% of your income this month.")
             elif expense_ratio < 30:
-                tips.append("You're saving a lot this month. Consider investing some of your savings to grow your wealth.")
+                tips.append("You're saving a lot this month. Consider investing.")
         for category, amount in expenses_by_cat.items():
             pct = (amount / total_expenses * 100) if total_expenses > 0 else 0
             if category == 'Food & Groceries' and pct > 40:
-                tips.append("Food takes up a big portion of your budget. Buying in bulk at Shoprite or local markets can reduce costs.")
+                tips.append("Food takes up a big portion. Try buying in bulk at Shoprite.")
             elif category == 'Transport (Minibus/Fuel)' and pct > 25:
-                tips.append("Transport costs are significant. Consider a monthly minibus pass or carpooling to save money.")
+                tips.append("Transport costs are high. Consider a monthly minibus pass.")
             elif category == 'Airtime & Data' and pct > 15:
-                tips.append("You're spending a lot on airtime. TNM and Airtel offer monthly bundles that could save you up to 30%.")
-            elif category == 'Utilities (ESCOM/Water)' and amount > 50000:
-                tips.append("High utility bill detected. Switch to energy-saving bulbs and fix water leaks to reduce monthly costs.")
+                tips.append("You're spending a lot on airtime. Monthly bundles save up to 30%.")
         if total_income > 0:
             savings = total_income - total_expenses
             if savings <= 0:
-                tips.append("No savings this month. Start small: put aside MK5,000 each week into a separate account.")
+                tips.append("No savings this month. Start small: MK5,000 each week.")
             elif savings < total_income * 0.1:
-                tips.append("You saved a bit this month. Aim to save at least 10% of your income for emergencies.")
+                tips.append("Aim to save at least 10% of your income for emergencies.")
         if not tips:
             generic_tips = [
                 "Track every expense, even small ones. They add up quickly.",
                 "Set aside an emergency fund of at least 3 months of expenses.",
-                "Review your subscriptions monthly and cancel what you don't use.",
                 "Plan your meals for the week to avoid impulse food purchases.",
-                "Use cash for daily expenses - it makes spending feel more real.",
-                "Compare prices before buying. A few minutes of research can save thousands.",
-                "Avoid buying airtime in small amounts. Bulk bundles are cheaper per MB.",
-                "Start a side hustle. Even MK20,000 extra per month makes a difference."
+                "Compare prices before buying. Research saves thousands.",
+                "Start a side hustle. Even MK20,000 extra makes a difference."
             ]
             tips.append(random.choice(generic_tips))
         return {
@@ -125,7 +129,13 @@ class APIHandler(BaseHTTPRequestHandler):
         }
     
     def do_GET(self):
+        tenant_id = self._get_tenant_id()  # Optional for public endpoints
+        
         if self.path.startswith('/api/transactions'):
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
                 query = urlparse(self.path).query
                 params = parse_qs(query) if query else {}
@@ -135,7 +145,11 @@ class APIHandler(BaseHTTPRequestHandler):
                     start_date = datetime.fromisoformat(params['start'][0])
                 if 'end' in params:
                     end_date = datetime.fromisoformat(params['end'][0])
-                transactions = db.get_transactions(start_date=start_date, end_date=end_date)
+                transactions = db.get_transactions(
+                    tenant_id=tenant_id,
+                    start_date=start_date,
+                    end_date=end_date
+                )
                 self._set_headers(200)
                 self.wfile.write(json.dumps([t.to_dict() for t in transactions]).encode())
             except Exception as e:
@@ -143,8 +157,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/balance':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
-                balance = db.get_balance()
+                balance = db.get_balance(tenant_id)
                 self._set_headers(200)
                 self.wfile.write(json.dumps({'balance': balance}).encode())
             except Exception as e:
@@ -152,9 +170,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/summary':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
                 now = datetime.now()
-                summary = db.get_monthly_summary(now.year, now.month)
+                summary = db.get_monthly_summary(now.year, now.month, tenant_id)
                 self._set_headers(200)
                 self.wfile.write(json.dumps(summary).encode())
             except Exception as e:
@@ -162,8 +184,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/tip':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
-                tip = self._generate_tip()
+                tip = self._generate_tip(tenant_id)
                 self._set_headers(200)
                 self.wfile.write(json.dumps(tip).encode())
             except Exception as e:
@@ -171,9 +197,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/budgets':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
                 cursor = db.conn.cursor()
-                cursor.execute("SELECT category, amount FROM budgets WHERE month = ? AND year = ?", (datetime.now().month, datetime.now().year))
+                cursor.execute(
+                    "SELECT category, amount FROM budgets WHERE tenant_id = ? AND month = ? AND year = ?",
+                    (tenant_id, datetime.now().month, datetime.now().year)
+                )
                 budgets = {row[0]: row[1] for row in cursor.fetchall()}
                 self._set_headers(200)
                 self.wfile.write(json.dumps(budgets).encode())
@@ -182,15 +215,19 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/recurring':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
                 cursor = db.conn.cursor()
-                cursor.execute("SELECT * FROM recurring ORDER BY next_date")
+                cursor.execute("SELECT * FROM recurring WHERE tenant_id = ? ORDER BY next_date", (tenant_id,))
                 recurring = []
                 for row in cursor.fetchall():
                     recurring.append({
-                        'id': row[0], 'amount': row[1], 'type': row[2],
-                        'category': row[3], 'description': row[4],
-                        'frequency': row[5], 'next_date': row[6]
+                        'id': row[0], 'amount': row[2], 'type': row[3],
+                        'category': row[4], 'description': row[5],
+                        'frequency': row[6], 'next_date': row[7]
                     })
                 self._set_headers(200)
                 self.wfile.write(json.dumps(recurring).encode())
@@ -199,14 +236,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/goals':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
                 cursor = db.conn.cursor()
-                cursor.execute("SELECT * FROM savings_goals ORDER BY created_at DESC")
+                cursor.execute("SELECT * FROM savings_goals WHERE tenant_id = ? ORDER BY created_at DESC", (tenant_id,))
                 goals = []
                 for row in cursor.fetchall():
                     goals.append({
-                        'id': row[0], 'name': row[1], 'target_amount': row[2],
-                        'current_amount': row[3], 'deadline': row[4], 'created_at': row[5]
+                        'id': row[0], 'name': row[2], 'target_amount': row[3],
+                        'current_amount': row[4], 'deadline': row[5], 'created_at': row[6]
                     })
                 self._set_headers(200)
                 self.wfile.write(json.dumps(goals).encode())
@@ -215,8 +256,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/export/csv':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
-                transactions = db.get_transactions()
+                transactions = db.get_transactions(tenant_id=tenant_id)
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/csv; charset=utf-8')
                 self.send_header('Content-Disposition', 'attachment; filename=kwachakeeper_transactions.csv')
@@ -232,6 +277,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
         elif self.path == '/api/report/pdf':
+            if not tenant_id:
+                self._set_headers(401)
+                self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+                return
             try:
                 from reportlab.lib.pagesizes import A4
                 from reportlab.lib import colors
@@ -240,8 +289,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 from reportlab.lib.units import mm
                 import io
                 now = datetime.now()
-                summary = db.get_monthly_summary(now.year, now.month)
-                transactions = db.get_transactions()
+                summary = db.get_monthly_summary(now.year, now.month, tenant_id)
+                transactions = db.get_transactions(tenant_id=tenant_id)
                 buf = io.BytesIO()
                 doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm)
                 styles = getSampleStyleSheet()
@@ -312,6 +361,7 @@ class APIHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
         
+        # Auth routes (no tenant required)
         if self.path == '/auth/signup':
             self._handle_signup(post_data)
             return
@@ -329,6 +379,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'valid': False}).encode())
             return
         
+        # All other routes require tenant
+        tenant_id = self._get_tenant_id()
+        if not tenant_id:
+            self._set_headers(401)
+            self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+            return
+        
         if self.path == '/api/transactions':
             try:
                 transaction = Transaction(
@@ -339,7 +396,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     description=post_data.get('description', ''),
                     date=datetime.fromisoformat(post_data['date']) if 'date' in post_data else datetime.now()
                 )
-                tx_id = db.add_transaction(transaction)
+                tx_id = db.add_transaction(transaction, tenant_id)
                 transaction.id = tx_id
                 self._set_headers(201)
                 self.wfile.write(json.dumps(transaction.to_dict()).encode())
@@ -349,7 +406,7 @@ class APIHandler(BaseHTTPRequestHandler):
         
         elif self.path == '/api/budgets':
             try:
-                db.set_budget(datetime.now().month, datetime.now().year, post_data['category'], float(post_data['amount']))
+                db.set_budget(datetime.now().month, datetime.now().year, post_data['category'], float(post_data['amount']), tenant_id)
                 self._set_headers(201)
                 self.wfile.write(json.dumps({'status': 'saved'}).encode())
             except Exception as e:
@@ -360,13 +417,11 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 cursor = db.conn.cursor()
                 cursor.execute("""
-                    INSERT INTO recurring (amount, type, category, description, frequency, next_date, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    float(post_data['amount']), post_data['type'], post_data['category'],
-                    post_data.get('description', ''), post_data.get('frequency', 'monthly'),
-                    post_data.get('next_date', datetime.now().isoformat()), datetime.now().isoformat()
-                ))
+                    INSERT INTO recurring (tenant_id, amount, type, category, description, frequency, next_date, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (tenant_id, float(post_data['amount']), post_data['type'], post_data['category'],
+                     post_data.get('description', ''), post_data.get('frequency', 'monthly'),
+                     post_data.get('next_date', datetime.now().isoformat()), datetime.now().isoformat()))
                 db.conn.commit()
                 self._set_headers(201)
                 self.wfile.write(json.dumps({'status': 'created', 'id': cursor.lastrowid}).encode())
@@ -378,9 +433,10 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 cursor = db.conn.cursor()
                 cursor.execute("""
-                    INSERT INTO savings_goals (name, target_amount, current_amount, deadline, created_at)
-                    VALUES (?, ?, 0, ?, ?)
-                """, (post_data['name'], float(post_data['target_amount']), post_data.get('deadline', ''), datetime.now().isoformat()))
+                    INSERT INTO savings_goals (tenant_id, name, target_amount, current_amount, deadline, created_at)
+                    VALUES (?, ?, ?, 0, ?, ?)
+                """, (tenant_id, post_data['name'], float(post_data['target_amount']),
+                     post_data.get('deadline', ''), datetime.now().isoformat()))
                 db.conn.commit()
                 self._set_headers(201)
                 self.wfile.write(json.dumps({'status': 'created', 'id': cursor.lastrowid}).encode())
@@ -392,8 +448,10 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 goal_id = int(self.path.split('/')[-2])
                 cursor = db.conn.cursor()
-                cursor.execute("UPDATE savings_goals SET current_amount = current_amount + ? WHERE id = ?",
-                             (float(post_data.get('amount', 0)), goal_id))
+                cursor.execute(
+                    "UPDATE savings_goals SET current_amount = current_amount + ? WHERE id = ? AND tenant_id = ?",
+                    (float(post_data.get('amount', 0)), goal_id, tenant_id)
+                )
                 db.conn.commit()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({'status': 'updated'}).encode())
@@ -406,6 +464,12 @@ class APIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
     
     def do_PUT(self):
+        tenant_id = self._get_tenant_id()
+        if not tenant_id:
+            self._set_headers(401)
+            self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+            return
+        
         if self.path.startswith('/api/transactions/'):
             try:
                 tx_id = int(self.path.split('/')[-1])
@@ -413,8 +477,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 put_data = json.loads(self.rfile.read(content_length))
                 cursor = db.conn.cursor()
                 cursor.execute("""
-                    UPDATE transactions SET amount = ?, type = ?, category = ?, description = ?, date = ? WHERE id = ?
-                """, (float(put_data['amount']), put_data['type'], put_data['category'], put_data.get('description', ''), put_data.get('date', datetime.now().isoformat()), tx_id))
+                    UPDATE transactions SET amount = ?, type = ?, category = ?, description = ?, date = ?
+                    WHERE id = ? AND tenant_id = ?
+                """, (float(put_data['amount']), put_data['type'], put_data['category'],
+                     put_data.get('description', ''), put_data.get('date', datetime.now().isoformat()),
+                     tx_id, tenant_id))
                 db.conn.commit()
                 if cursor.rowcount > 0:
                     self._set_headers(200)
@@ -430,11 +497,17 @@ class APIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
     
     def do_DELETE(self):
+        tenant_id = self._get_tenant_id()
+        if not tenant_id:
+            self._set_headers(401)
+            self.wfile.write(json.dumps({'error': 'Authentication required'}).encode())
+            return
+        
         if self.path.startswith('/api/transactions/'):
             try:
                 tx_id = int(self.path.split('/')[-1])
                 cursor = db.conn.cursor()
-                cursor.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+                cursor.execute("DELETE FROM transactions WHERE id = ? AND tenant_id = ?", (tx_id, tenant_id))
                 db.conn.commit()
                 if cursor.rowcount > 0:
                     self._set_headers(200)
@@ -449,7 +522,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 rec_id = int(self.path.split('/')[-1])
                 cursor = db.conn.cursor()
-                cursor.execute("DELETE FROM recurring WHERE id = ?", (rec_id,))
+                cursor.execute("DELETE FROM recurring WHERE id = ? AND tenant_id = ?", (rec_id, tenant_id))
                 db.conn.commit()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({'status': 'deleted'}).encode())
@@ -460,7 +533,7 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 goal_id = int(self.path.split('/')[-1])
                 cursor = db.conn.cursor()
-                cursor.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
+                cursor.execute("DELETE FROM savings_goals WHERE id = ? AND tenant_id = ?", (goal_id, tenant_id))
                 db.conn.commit()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({'status': 'deleted'}).encode())
