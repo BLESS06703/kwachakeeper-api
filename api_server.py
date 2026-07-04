@@ -406,6 +406,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+elif self.path == '/api/reset-db':            try:                import os                db.conn.close()                auth_db.conn.close()                os.remove('kwacha_keeper.db')                self._set_headers(200)                self.wfile.write(json.dumps({'status': 'DB deleted, restarting'}).encode())            except Exception as e:                self._set_headers(500)                self.wfile.write(json.dumps({'error': str(e)}).encode())
         elif self.path == '/api/health':
             self._set_headers(200)
             self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
