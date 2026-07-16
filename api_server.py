@@ -11,7 +11,7 @@ import time
 import random
 import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 from src.models.database import Database
 from src.models.transaction import Transaction, TransactionType, Category
@@ -406,6 +406,36 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        elif self.path == '/api/notifications':
+            if not tenant_id:
+                self._set_headers(401); self.wfile.write(json.dumps({'error': 'Auth required'}).encode()); return
+            try:
+                now = datetime.now()
+                alerts = []
+                summary = db.get_monthly_summary(now.year, now.month, tenant_id)
+                cursor = db.conn.cursor()
+                cursor.execute("SELECT category, amount FROM budgets WHERE tenant_id=? AND month=? AND year=?", (tenant_id, now.month, now.year))
+                budgets = {row[0]: row[1] for row in cursor.fetchall()}
+                for cat, budgeted in budgets.items():
+                    spent = summary["expenses_by_category"].get(cat, 0)
+                    pct = (spent / budgeted * 100) if budgeted > 0 else 0
+                    if pct >= 100:
+                        alerts.append({"type": "danger", "message": f"Over budget on {cat}", "detail": f"Spent MK{spent:,.0f} of MK{budgeted:,.0f}"})
+                    elif pct >= 80:
+                        alerts.append({"type": "warning", "message": f"Nearing budget limit on {cat}", "detail": f"{pct:.0f}% used"})
+                cursor.execute("SELECT * FROM recurring WHERE tenant_id=? AND next_date <= ?", (tenant_id, (now + timedelta(days=3)).isoformat()))
+                for r in cursor.fetchall():
+                    alerts.append({"type": "info", "message": f"Upcoming: {r[4]}", "detail": f"MK{r[2]:,.0f} due on {r[7][:10]}"})
+                if summary["total_income"] > 0:
+                    savings_rate = ((summary["total_income"] - summary["total_expenses"]) / summary["total_income"]) * 100
+                    if savings_rate < 0:
+                        alerts.append({"type": "danger", "message": "Negative savings this month", "detail": "Spending more than earning"})
+                    elif savings_rate < 10:
+                        alerts.append({"type": "warning", "message": "Low savings rate", "detail": f"Only {savings_rate:.0f}% saved"})
+                alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
+                self._set_headers(200); self.wfile.write(json.dumps(alerts[:5]).encode())
+            except Exception as e:
+                self._set_headers(500); self.wfile.write(json.dumps({'error': str(e)}).encode())
         elif self.path == '/api/health':
             self._set_headers(200)
             self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
