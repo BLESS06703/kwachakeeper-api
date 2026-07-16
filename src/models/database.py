@@ -1,10 +1,9 @@
 """
 KwachaKeeper - SQLite Database Manager
-Multi-tenant secure database with encryption and audit logs
+Multi-tenant with wallets, encryption, and audit logs
 """
 
 import sqlite3
-import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 from src.models.encryption import encrypt, decrypt
@@ -12,7 +11,6 @@ from .transaction import Transaction, TransactionType, Category
 
 
 class Database:
-    """SQLite database manager for KwachaKeeper"""
     
     def __init__(self, db_path: str = "kwacha_keeper.db"):
         self.db_path = db_path
@@ -26,34 +24,33 @@ class Database:
         
         cursor.execute('''CREATE TABLE IF NOT EXISTS tenants (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_at TEXT NOT NULL)''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL DEFAULT 1,
             amount REAL NOT NULL, type TEXT NOT NULL, category TEXT NOT NULL,
             description TEXT, date TEXT NOT NULL, created_at TEXT NOT NULL)''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS budgets (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL DEFAULT 1,
             month INTEGER NOT NULL, year INTEGER NOT NULL, category TEXT NOT NULL,
             amount REAL NOT NULL, created_at TEXT NOT NULL,
             UNIQUE(tenant_id, month, year, category))''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS savings_goals (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL, target_amount REAL NOT NULL, current_amount REAL DEFAULT 0,
             deadline TEXT, created_at TEXT NOT NULL)''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS recurring (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL DEFAULT 1,
             amount REAL NOT NULL, type TEXT NOT NULL, category TEXT NOT NULL,
             description TEXT DEFAULT '', frequency TEXT NOT NULL DEFAULT 'monthly',
             next_date TEXT NOT NULL, created_at TEXT NOT NULL)''')
-        
+        cursor.execute('''CREATE TABLE IF NOT EXISTS wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL DEFAULT 1,
+            name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'cash',
+            color TEXT DEFAULT '#4CAF50', is_active INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, user_id INTEGER,
             action TEXT NOT NULL, resource TEXT NOT NULL, details TEXT,
             ip_address TEXT, created_at TEXT NOT NULL)''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL, token_hash TEXT NOT NULL, device_info TEXT,
@@ -67,11 +64,23 @@ class Database:
         
         self.conn.commit()
     
-    def log_audit(self, tenant_id: int, user_id: int, action: str, resource: str, details: str = '', ip_address: str = ''):
+    def create_wallet(self, tenant_id: int, name: str, wallet_type: str = 'cash', color: str = '#4CAF50') -> int:
         cursor = self.conn.cursor()
-        cursor.execute('''INSERT INTO audit_logs (tenant_id, user_id, action, resource, details, ip_address, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                     (tenant_id, user_id, action, resource, details, ip_address, datetime.now().isoformat()))
+        cursor.execute('''INSERT INTO wallets (tenant_id, name, type, color, created_at)
+                        VALUES (?, ?, ?, ?, ?)''',
+                     (tenant_id, name, wallet_type, color, datetime.now().isoformat()))
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def get_wallets(self, tenant_id: int) -> list:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM wallets WHERE tenant_id = ? AND is_active = 1 ORDER BY id", (tenant_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def delete_wallet(self, wallet_id: int, tenant_id: int):
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE wallets SET is_active = 0 WHERE id = ? AND tenant_id = ?", 
+                     (wallet_id, tenant_id))
         self.conn.commit()
     
     def add_transaction(self, transaction: Transaction, tenant_id: int = 1) -> int:
