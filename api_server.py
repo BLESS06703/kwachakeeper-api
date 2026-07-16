@@ -271,6 +271,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        elif self.path == '/api/wallets':
+            if not tenant_id: self._set_headers(401); self.wfile.write(json.dumps({'error': 'Auth required'}).encode()); return
+            try:
+                wallets = db.get_wallets(tenant_id)
+                self._set_headers(200); self.wfile.write(json.dumps(wallets).encode())
+            except Exception as e: self._set_headers(500); self.wfile.write(json.dumps({'error': str(e)}).encode())
         elif self.path == '/api/recurring':
             if not tenant_id:
                 self._set_headers(401)
@@ -539,6 +545,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
         
+        elif self.path == '/api/wallets':
+            try:
+                wallet_id = db.create_wallet(tenant_id, post_data["name"], post_data.get("type", "cash"), post_data.get("color", "#4CAF50"))
+                self._set_headers(201); self.wfile.write(json.dumps({"status": "created", "id": wallet_id}).encode())
+            except Exception as e: self._set_headers(500); self.wfile.write(json.dumps({"error": str(e)}).encode())
         elif self.path == '/api/budgets':
             try:
                 db.set_budget(datetime.now().month, datetime.now().year, post_data['category'], float(post_data['amount']), tenant_id)
@@ -664,6 +675,12 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({'error': str(e)}).encode())
+        elif self.path.startswith('/api/wallets/'):
+            try:
+                wallet_id = int(self.path.split('/')[-1])
+                db.delete_wallet(wallet_id, tenant_id)
+                self._set_headers(200); self.wfile.write(json.dumps({"status": "deleted"}).encode())
+            except Exception as e: self._set_headers(500); self.wfile.write(json.dumps({"error": str(e)}).encode())
         elif self.path.startswith('/api/goals/'):
             try:
                 goal_id = int(self.path.split('/')[-1])
