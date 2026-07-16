@@ -436,6 +436,40 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers(200); self.wfile.write(json.dumps(alerts[:5]).encode())
             except Exception as e:
                 self._set_headers(500); self.wfile.write(json.dumps({'error': str(e)}).encode())
+        elif self.path == '/api/health-score':
+            if not tenant_id:
+                self._set_headers(401); self.wfile.write(json.dumps({'error': 'Auth required'}).encode()); return
+            try:
+                now = datetime.now()
+                summary = db.get_monthly_summary(now.year, now.month, tenant_id)
+                cursor = db.conn.cursor()
+                cursor.execute("SELECT category, amount FROM budgets WHERE tenant_id=? AND month=? AND year=?", (tenant_id, now.month, now.year))
+                budgets = {row[0]: row[1] for row in cursor.fetchall()}
+                total_balance = db.get_balance(tenant_id)
+                score = 50
+                if summary["total_income"] > 0:
+                    savings_rate = ((summary["total_income"] - summary["total_expenses"]) / summary["total_income"]) * 100
+                    if savings_rate >= 20: score += 20
+                    elif savings_rate >= 10: score += 10
+                    elif savings_rate > 0: score += 5
+                budget_count = len(budgets)
+                if budget_count > 0:
+                    on_track = sum(1 for cat, b in budgets.items() if summary["expenses_by_category"].get(cat, 0) <= b)
+                    score += int((on_track / budget_count) * 30)
+                if summary["total_income"] > 0:
+                    expense_ratio = (summary["total_expenses"] / summary["total_income"]) * 100
+                    if expense_ratio <= 50: score += 20
+                    elif expense_ratio <= 80: score += 10
+                if total_balance > 0: score += 20
+                score = min(score, 100)
+                tips = []
+                if savings_rate < 10: tips.append("Aim to save 10% of your income")
+                if budget_count > 0 and on_track < budget_count: tips.append("Stay within budgets to improve")
+                if total_balance <= 0: tips.append("Build an emergency fund")
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"score": score, "max": 100, "tips": tips}).encode())
+            except Exception as e:
+                self._set_headers(500); self.wfile.write(json.dumps({'error': str(e)}).encode())
         elif self.path == '/api/health':
             self._set_headers(200)
             self.wfile.write(json.dumps({'status': 'ok', 'auth': True}).encode())
