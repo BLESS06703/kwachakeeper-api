@@ -98,6 +98,7 @@ class APIHandler(BaseHTTPRequestHandler):
             user = auth_db.create_user(email, password)
             token = auth_db.generate_token(user)
             refresh_token = auth_db.generate_refresh_token(user)
+            db.create_wallet(user.tenant_id, "Main Wallet", "cash", "#4CAF50")
             self._set_headers(201)
             self.wfile.write(json.dumps({
                 'user': user.to_dict(),
